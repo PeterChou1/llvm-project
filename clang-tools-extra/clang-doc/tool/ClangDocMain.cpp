@@ -22,8 +22,6 @@
 #include "ClangDoc.h"
 #include "Generators.h"
 #include "Representation.h"
-#include "clang/AST/AST.h"
-#include "clang/AST/Decl.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchersInternal.h"
 #include "clang/Driver/Options.h"
@@ -31,20 +29,19 @@
 #include "clang/Tooling/AllTUsExecution.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Execution.h"
-#include "clang/Tooling/Tooling.h"
-#include "llvm/ADT/APFloat.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <fcntl.h>
 
 using namespace clang::ast_matchers;
 using namespace clang::tooling;
@@ -164,6 +161,11 @@ Example usage for a project using a compile commands database:
     return 1;
   }
 
+  // 500 microsecond is the default for clang might want
+  // add option for it later
+  llvm::timeTraceProfilerInitialize(500, "clang-doc");
+
+
   ArgumentsAdjuster ArgAdjuster;
   if (!DoxygenOnly)
     ArgAdjuster = combineAdjusters(
@@ -201,7 +203,10 @@ Example usage for a project using a compile commands database:
     CDCtx.FilesToCopy.emplace_back(IndexJS.str());
   }
 
+  llvm::timeTraceProfilerBegin("clang-doc total", "logging events");
   // Mapping phase
+
+  llvm::timeTraceProfilerBegin("clang-doc mapping decls", "logging events");
   llvm::outs() << "Mapping decls...\n";
   auto Err =
       Executor->get()->execute(doc::newMapperActionFactory(CDCtx), ArgAdjuster);
@@ -215,10 +220,13 @@ Example usage for a project using a compile commands database:
       return 1;
     }
   }
+  llvm::timeTraceProfilerEnd();
 
+  llvm::timeTraceProfilerBegin("clang-doc collecting infos", "logging events");
   // Collect values into output by key.
   // In ToolResults, the Key is the hashed USR and the value is the
   // bitcode-encoded representation of the Info object.
+  //llvm::timeTraceProfilerBegin("collecting infos", "logging events");
   llvm::outs() << "Collecting infos...\n";
   llvm::StringMap<std::vector<StringRef>> USRToBitcode;
   Executor->get()->getToolResults()->forEachResult(
@@ -226,7 +234,9 @@ Example usage for a project using a compile commands database:
         auto R = USRToBitcode.try_emplace(Key, std::vector<StringRef>());
         R.first->second.emplace_back(Value);
       });
+  llvm::timeTraceProfilerEnd();
 
+  llvm::timeTraceProfilerBegin("clang-doc reducing infos", "logging events");
   // Collects all Infos according to their unique USR value. This map is added
   // to from the thread pool below and is protected by the USRToInfoMutex.
   llvm::sys::Mutex USRToInfoMutex;
@@ -277,6 +287,7 @@ Example usage for a project using a compile commands database:
   }
 
   Pool.wait();
+  llvm::timeTraceProfilerEnd();
 
   if (Error)
     return 1;
@@ -288,6 +299,7 @@ Example usage for a project using a compile commands database:
     return 1;
   }
 
+  llvm::timeTraceProfilerBegin("clang-doc generating docs assets", "logging events");
   // Run the generator.
   llvm::outs() << "Generating docs...\n";
   if (auto Err =
@@ -302,6 +314,16 @@ Example usage for a project using a compile commands database:
     llvm::errs() << toString(std::move(Err)) << "\n";
     return 1;
   }
+  llvm::timeTraceProfilerEnd();
 
+  llvm::timeTraceProfilerEnd();
+
+  std::error_code EC;
+  llvm::raw_fd_ostream OS("A:\\WPE\\trace_output.json", EC, llvm::sys::fs::OF_Text);
+  if (!EC) {
+    llvm::timeTraceProfilerWrite(OS);
+  } else {
+    llvm::errs() << "Error opening file: " << EC.message() << "\n";
+  }
   return 0;
 }

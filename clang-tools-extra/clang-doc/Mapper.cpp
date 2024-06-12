@@ -13,15 +13,18 @@
 #include "clang/Index/USRGeneration.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/TimeProfiler.h"
 
 namespace clang {
 namespace doc {
 
 void MapASTVisitor::HandleTranslationUnit(ASTContext &Context) {
+  llvm::TimeTraceScope Scope("Handle Translation Unit");
   TraverseDecl(Context.getTranslationUnitDecl());
 }
 
 template <typename T> bool MapASTVisitor::mapDecl(const T *D) {
+  llvm::timeTraceProfilerBegin("MapDecl", "Map Declarations");
   // If we're looking a decl not in user files, skip this decl.
   if (D->getASTContext().getSourceManager().isInSystemHeader(D->getLocation()))
     return true;
@@ -49,6 +52,7 @@ template <typename T> bool MapASTVisitor::mapDecl(const T *D) {
   if (I.second)
     CDCtx.ECtx->reportResult(llvm::toHex(llvm::toStringRef(I.second->USR)),
                              serialize::serialize(I.second));
+  llvm::timeTraceProfilerEnd();
   return true;
 }
 
@@ -81,6 +85,7 @@ bool MapASTVisitor::VisitTypeAliasDecl(const TypeAliasDecl *D) {
 
 comments::FullComment *
 MapASTVisitor::getComment(const NamedDecl *D, const ASTContext &Context) const {
+  llvm::TimeTraceScope Scope("Get Comment");
   RawComment *Comment = Context.getRawCommentForDeclNoCache(D);
   // FIXME: Move setAttached to the initial comment parsing.
   if (Comment) {
@@ -92,6 +97,7 @@ MapASTVisitor::getComment(const NamedDecl *D, const ASTContext &Context) const {
 
 int MapASTVisitor::getLine(const NamedDecl *D,
                            const ASTContext &Context) const {
+  llvm::TimeTraceScope Scope("Get Line");
   return Context.getSourceManager().getPresumedLoc(D->getBeginLoc()).getLine();
 }
 
@@ -99,6 +105,7 @@ llvm::SmallString<128> MapASTVisitor::getFile(const NamedDecl *D,
                                               const ASTContext &Context,
                                               llvm::StringRef RootDir,
                                               bool &IsFileInRootDir) const {
+  llvm::TimeTraceScope Scope("Get Files");
   llvm::SmallString<128> File(Context.getSourceManager()
                                   .getPresumedLoc(D->getBeginLoc())
                                   .getFilename());
